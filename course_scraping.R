@@ -31,5 +31,5 @@ scrape <- function(url) {
     select(Institut, Semester, Kursusnavn, Type, Deltagere, Dato, Start, Slut, Lokale) #Drop unnecessary columns
 }
 
-url <- 'https://skema.ku.dk/tt/tt.asp?SDB=KU1718&language=DK&folder=Reporting&style=textspreadsheet&type=module&idtype=id&id=71520&weeks=1-27&days=1-5&periods=1-68&width=0&height=0&template=SWSCUST2+module+textspreadsheetA'
+url <- 'https://skema.ku.dk/tt/tt.asp?SDB=KU1718&language=DK&folder=Reporting&style=textspreadsheet&type=module&idtype=id&id=71500&weeks=1-27&days=1-5&periods=5-52&width=0&height=0&template=SWSCUST2+module+textspreadsheetA'
 test <- scrape(url)
