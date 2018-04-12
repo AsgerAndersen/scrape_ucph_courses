@@ -24,51 +24,67 @@ course_list %<>%
 #---------------------------------------------------------------------------------------
 #Function for scraping the timetable of a single course
 
-deltagere <- Vectorize(function(t, b) {
-  if(t=='Forelæsning') {
-    'Alle'
-  }
-  else {
-    b
-    #str_extract(b, 'Hold .')
-  }
-})
 
 scrape_course <- function(url) {
-  
+
   webpage <- read_html(url) #Get raw html
   
   #Extract course name, institute and semester
   title <- webpage %>% 
     html_node('.header-5-0-5') %>% 
     html_text() %>% 
-    str_split('[-;]') %>% 
-    unlist() 
+    str_split(';')
+  
+  title[[1]][1] %<>% str_split('-', n=2)
+  title %<>% unlist()
   
   #Extract the html tables as dataframes
   timetables <- webpage %>% 
     html_nodes('.spreadsheet') %>%
     html_table(header=T)
   
-  #Collect all the weekly dataframes to one dataframe. Use the dates column to keep track of the observations.
-  distinct( #Remove duplicates
-    bind_rows( #Collect all the weekly dataframes to one dataframe
-      map(timetables, ~unnest( #One observation for each date
-          mutate(., Dato=str_split(Dato, ';'))) #Split the dates 
-        )
-      )
-    ) %>% #Make new columns
-    mutate(Deltagere = deltagere(Type,Beskrivelse), #Who should be participating in the class as a column
-           Institut = title[1],
+  #Returns all the weekly dataframes collected as one dataframe
+  map(timetables, format_timetable) %>% 
+    bind_rows() %>%
+    distinct() %>%
+    mutate(Institut = title[1],
            Semester = title[2],
            Kursusnavn = title[3]) %>% 
-    select(Institut, Semester, Kursusnavn, Type, Deltagere, Dato, Start, Slut, Lokale) #Drop unnecessary columns
+    select(Institut, Semester, Kursusnavn, Type, Deltagere, Dato, Start, Slut, Lokale)
 }
 
 #Add error handling
 scrape_course_err <- function(url) {
   tryCatch(scrape_course(url), error = function(e) {e})
 }
+
+#Helper functions
+format_timetable <- function(tt) {
+  tt %>% 
+    mutate_all(to_character) %>%
+    mutate(Deltagere = deltagere(Type, Beskrivelse)) %>% 
+    mutate(Dato=str_split(Dato, ';')) %>% 
+    unnest()
+}
+
+to_character <- Vectorize(function(x) {
+  if (is.logical(x)) {
+    str_sub(as.character(x), 1, 1)
+  }
+  else x
+})
+
+regex <- '((H|h)old|(E|e)x. (C|c)lass) {0,1}\\d+( {0,1}\\+ {0,1}\\d+)*'
+deltagere <- Vectorize(function(t, b) {
+  if(t=='Forelæsning') {
+    'Alle'
+  }
+  else {
+    d <- str_extract(b, regex) 
+    if (is.na(d)) {b}
+    else {d}
+  }
+})
 
 #---------------------------------------------------------------------------------------
 #Scrape timetables of all relevant courses
@@ -133,7 +149,7 @@ scrape_department <- function(department, n=0) {
   failures <- courses %>%
     filter(is.na(Timetable))
   
-  list('Timetable'=timetable, 'Failures'=failures)
+  list('Timetable'=timetable, 'Failures'=failures, 'Courses'=courses)
 }
 
 economy_timetable <- scrape_department(2200)
