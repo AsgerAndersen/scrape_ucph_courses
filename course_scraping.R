@@ -18,7 +18,7 @@ course_list <- read_csv('~/Downloads/course_list.csv', col_names = c('Modul', 'I
 course_list %<>%
   mutate(Institut = as.integer(str_sub(Institut,1,4)),
          Semester = str_remove(str_sub(Modul, 6),';.*')) %>%
-  filter(is.element(Semester, sems)) %>% #Tjek for de andre institutter, at jeg også kun filterere irrelevante rækker fra her
+  filter(is.element(Semester, sems)) %>% 
   mutate(Timetable_sem = timetable_sem(Semester))
 
 #---------------------------------------------------------------------------------------
@@ -50,7 +50,7 @@ scrape_course <- function(url) {
     mutate(Institut = title[1],
            Semester = title[2],
            Kursusnavn = title[3]) %>% 
-    select(Institut, Semester, Kursusnavn, Type, Deltagere, Dato, Start, Slut, Lokale)
+    select(Institut, Semester, Kursusnavn, Type, Dato, Start, Slut, Lokale, Beskrivelse)
 }
 
 #Add error handling
@@ -62,7 +62,6 @@ scrape_course_err <- function(url) {
 format_timetable <- function(tt) {
   tt %>% 
     mutate_all(to_character) %>%
-    mutate(Deltagere = deltagere(Type, Beskrivelse)) %>% 
     mutate(Dato=str_split(Dato, ';')) %>% 
     unnest()
 }
@@ -72,18 +71,6 @@ to_character <- Vectorize(function(x) {
     str_sub(as.character(x), 1, 1)
   }
   else x
-})
-
-regex <- '((H|h)old|(E|e)x. (C|c)lass) {0,1}\\d+( {0,1}\\+ {0,1}\\d+)*'
-deltagere <- Vectorize(function(t, b) {
-  if(t=='Forelæsning') {
-    'Alle'
-  }
-  else {
-    d <- str_extract(b, regex) 
-    if (is.na(d)) {b}
-    else {d}
-  }
 })
 
 #---------------------------------------------------------------------------------------
@@ -152,6 +139,108 @@ scrape_department <- function(department, n=0) {
   list('Timetable'=timetable, 'Failures'=failures, 'Courses'=courses)
 }
 
+scrape_departments <- function(course_list, departments, simplify_participants) {
+  
+}
+
 economy_timetable <- scrape_department(2200)
-write_csv(economy_timetable[[1]], 'economy_timetable.csv')
-write_csv(select(economy_timetable[[2]], Modul), 'errors.csv')
+politics_timetable <- scrape_department(2300)
+antro_timetable <- scrape_department(2400)
+socio_timetable <- scrape_department(2500)
+
+#------------------------------------------------------------------------------------------------------------------
+#Make one single timetable for all departments and format it
+
+timetable <- bind_rows(list(economy_timetable[[1]],
+               politics_timetable[[1]],
+               antro_timetable[[1]],
+               socio_timetable[[1]]))
+
+format_yearly_timetable <- function(tt) {
+  tt %>% 
+    filter(is.na(Beskrivelse) | 
+             Beskrivelse != 'Please do not take notice of this booking - it is a system related matter') %>% 
+    mutate(Lokale = ifelse(is.na(Lokale), Beskrivelse, Lokale),
+           Type = type(Type, Beskrivelse),
+           Team = deltagere(Type, Beskrivelse),
+           Team_num = ifelse(Team=='Alle','-1',Team) %>% 
+             str_extract_all(str_c('-{0,1}',team_number)) %>%
+             map(replace_romans) %>%
+             map_chr(function(ns) str_c(ns, collapse = ',')))
+}
+
+type <- Vectorize(function(t, b) {
+  if (!is.na(t)) {
+    t
+  }
+  else {
+    if (is.na(b)) {
+      'Undervisning'
+    }
+    else if (str_detect(b, '(F|f)orelæsning|(L|l)ecture|F |L ')) {
+      'Forelæsning'
+    }
+    else {
+      'Undervisning'
+    }
+  }
+})
+
+team <- '(hold|ex. class|class|klynge|cluster|team)'
+team_number <- '(\\d+|I+)' 
+concat <- '(\\+|og|and|&|,)'
+space <- '( {0,1})'
+repeat_regex <- function(reg, star) {
+  if (star) {s <- '*'}
+  else {s <- '+'}
+  str_c('(',reg,')',s)
+}
+
+regex_deltagere <- repeat_regex(str_c(team,
+                                      space,
+                                      team_number,
+                                      repeat_regex(str_c(space,
+                                                         concat,
+                                                         space,
+                                                         team_number), T),
+                                      space), F)
+
+deltagere <- Vectorize(function(t, b, simplify=T) {
+  if(t=='Forelæsning') {
+    'Alle'
+  }
+  else {
+    d <- str_extract(b, regex(regex_deltagere, ignore_case = T)) 
+    if (is.na(d)) {
+      if (simplify) {
+        'Alle'
+      }
+      else {
+        b
+      }
+    }
+    else {d}
+  }
+})
+
+replace_romans <- Vectorize(function(n) {
+  if (n=='I') {
+    '1'
+  }
+  else if (n=='II') {
+    '2'
+  }
+  else if (n=='III') {
+    '3'
+  }
+  else {
+    n
+  }
+})
+
+timetable %<>% format_yearly_timetable()
+write_csv(timetable, 'timetable_all_departments_1718.csv')
+
+#1) Make function from yearly course list to formatted dataframe from all departments
+#2) Get course lists from all years
+#3) Scrape all years
