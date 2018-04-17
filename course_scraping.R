@@ -5,25 +5,42 @@ library(rvest)
 setwd('~/my_files/arbejde/sodas/scrape_ucph_courses')
 
 #---------------------------------------------------------------------------------------
-#Scrape list of courses
+#Function for loading and formatting the course lists. 
+#The loaded csv files have been made with js files taken from the timetable webpage.
 
-sems <- c('B5-5F17', 'B5-5F18', 'E17', 'F18')
-timetable_sem <- Vectorize(function(sem) {
-  if (is.element(sem, sems[1:2])) {'S'}
-  else if (sem==sems[3]) {'E'}
-  else {'F'}
-})
+read_courselist <- function(year) {
+  
+  starty <- str_sub(year, end=2)
+  endy <- str_sub(year, start=3)
+  sems <- c(str_c('B5-5F',starty), 
+            str_c('B5-5F',endy), 
+            str_c('E',starty), 
+            str_c('F',endy))
+  
+  timetable_sem <- Vectorize(function(sem) {
+    if (is.element(sem, sems[1:2])) {'S'}
+    else if (sem==sems[3]) {'E'}
+    else {'F'}
+  })
+  
+  read_csv(str_c('course_list',year,'.csv'),
+           col_names = c('module', 'institute', 'id')) %>%
+    mutate(institute_num = as.integer(str_sub(institute,1,4)),
+           semester = str_remove(str_sub(module, 6),';.*')) %>%
+    filter(is.element(semester, sems)) %>% 
+    mutate(timetable_sem = timetable_sem(semester),
+           start_year = starty,
+           end_year = endy)
+  
+}
 
-course_list <- read_csv('~/Downloads/course_list.csv', col_names = c('Modul', 'Institut', 'Id'))
-course_list %<>%
-  mutate(Institut = as.integer(str_sub(Institut,1,4)),
-         Semester = str_remove(str_sub(Modul, 6),';.*')) %>%
-  filter(is.element(Semester, sems)) %>% 
-  mutate(Timetable_sem = timetable_sem(Semester))
+
+years <- c('1516','1617','1718')
+course_lists <- map(years, read_courselist)
+names(course_lists) <- years
 
 #---------------------------------------------------------------------------------------
 #Function for scraping the timetable of a single course
-
 
 scrape_course <- function(url) {
 
@@ -47,11 +64,18 @@ scrape_course <- function(url) {
   map(timetables, format_timetable) %>% 
     bind_rows() %>%
     distinct() %>%
-    mutate(Institut = title[1],
-           Semester = title[2],
-           Kursusnavn = title[3]) %>% 
-    select(Institut, Semester, Kursusnavn, Type, Dato, Start, Slut, Lokale, Beskrivelse)
+    mutate(institute_num = title[1],
+           semester = title[2],
+           course_name = title[3]) %>% 
+    select(institute_num, semester, course_name, 
+           class_type = Type, date = Dato, 
+           start_time = Start, end_time = Slut, 
+           place = Lokale, description = Beskrivelse)
 }
+
+ 
+#x <- scrape_course('https://skema.ku.dk/tt/tt.asp?SDB=KU1617&language=DK&folder=Reporting&style=textspreadsheet&type=module&idtype=id&id=61367&weeks=1-27&days=1-5&periods=5-52&width=0&height=0&template=SWSCUST2+module+textspreadsheetA')
+#rm(x)
 
 #Add error handling
 scrape_course_err <- function(url) {
@@ -77,8 +101,9 @@ to_character <- Vectorize(function(x) {
 #Scrape timetables of all relevant courses
 
 #Url generation
-start <- 'https://skema.ku.dk/tt/tt.asp?SDB=KU1718&language=DK&folder=Reporting&style=textspreadsheet&type=module&idtype=id' 
-end <- '&width=0&height=0&template=SWSCUST2+module+textspreadsheetA'
+url_start <- 'https://skema.ku.dk/tt/tt.asp?SDB=KU'
+url_mid <- '&language=DK&folder=Reporting&style=textspreadsheet&type=module&idtype=id' 
+url_end <- '&width=0&height=0&template=SWSCUST2+module+textspreadsheetA'
 
 weeks <- list('E'='&weeks=1-27', 
               'F'='&weeks=27-52', 
@@ -88,12 +113,13 @@ periods <- list('E'='&days=1-5&periods=1-68',
                 'F'='&days=1-5&periods=5-52', 
                 'S'=c('&days=1-5&periods=1-68', '&days=1-5&periods=5-52'))
 
-url <- Vectorize(function(sem, id) {
+url <- Vectorize(function(starty, endy, sem, id) {
   these_weeks <- weeks[[sem]]
   these_periods <- periods[[sem]]
   this_id <- str_c('&id=',id)
+  this_year <- str_c(starty, endy)
   map2(these_weeks, these_periods,
-       function(x,y) {str_c(start, this_id, x, y, end)})
+       function(x,y) {str_c(url_start, this_year, url_mid, this_id, x, y, url_end)})
 })
 
 #Function for scraping all courses in a department
@@ -114,63 +140,52 @@ get_errors <- Vectorize(function(scraped) {
   es
 })
 
-scrape_department <- function(department, n=0) {
+scrape_department <- function(course_list, department, n=0) {
   
   courses <- course_list %>% 
-    filter(Institut==department) %>% 
-    select(-Institut, -Semester) %>% 
-    mutate(Url=url(Timetable_sem, Id))
+    filter(institute_num==department) %>% 
+    select(-institute_num, -semester) %>% 
+    mutate(Url=url(start_year, end_year, timetable_sem, id))
   
   if (n>0) {courses %<>% slice(1:n)}
   
   courses %<>% 
-    mutate(Scraped = map(Url, ~map(unlist(.), scrape_course_err)),
-           Timetable = get_timetable(Scraped),
-           Errors = get_errors(Scraped))
+    mutate(scraped = map(Url, ~map(unlist(.), scrape_course_err)),
+           timetable = get_timetable(scraped),
+           errors = get_errors(scraped))
   
   timetable <- courses %>%
-    filter(!is.na(Timetable)) %>%
-    .$Timetable %>%
+    filter(!is.na(timetable)) %>%
+    .$timetable %>%
     bind_rows()
   
   failures <- courses %>%
-    filter(is.na(Timetable))
+    filter(is.na(timetable))
   
-  list('Timetable'=timetable, 'Failures'=failures, 'Courses'=courses)
+  list('timetable'=timetable, 'failures'=failures, 'courses'=courses)
 }
-
-scrape_departments <- function(course_list, departments, simplify_participants) {
-  
-}
-
-economy_timetable <- scrape_department(2200)
-politics_timetable <- scrape_department(2300)
-antro_timetable <- scrape_department(2400)
-socio_timetable <- scrape_department(2500)
 
 #------------------------------------------------------------------------------------------------------------------
 #Make one single timetable for all departments and format it
 
-timetable <- bind_rows(list(economy_timetable[[1]],
-               politics_timetable[[1]],
-               antro_timetable[[1]],
-               socio_timetable[[1]]))
-
-format_yearly_timetable <- function(tt) {
+format_yearly_timetable <- function(tt, studyyear) {
   tt %>% 
-    filter(is.na(Beskrivelse) | 
-             Beskrivelse != 'Please do not take notice of this booking - it is a system related matter') %>% 
-    mutate(Lokale = ifelse(is.na(Lokale), Beskrivelse, Lokale),
-           Type = type(Type, Beskrivelse),
-           Team = deltagere(Type, Beskrivelse),
-           Team_num = ifelse(Team=='Alle','-1',Team) %>% 
+    filter(is.na(description) | 
+             description != 'Please do not take notice of this booking - it is a system related matter') %>% 
+    mutate(place = ifelse(is.na(place), description, place),
+           class_type = find_class_type(class_type, description),
+           participants = find_participants(class_type, description),
+           class_num = ifelse(str_detect(participants, regex('All|tilvalg|samf', ignore_case = T)),'-1',participants) %>% 
              str_extract_all(str_c('-{0,1}',team_number)) %>%
              map(replace_romans) %>%
-             map_chr(function(ns) str_c(ns, collapse = ',')))
+             map_chr(function(ns) str_c(ns, collapse = ',')),
+           class_num = ifelse(str_detect(participants, regex('tilvalg|samf', ignore_case = T)),'-2', class_num),
+           studyyear=studyyear
+          )
 }
 
-type <- Vectorize(function(t, b) {
-  if (!is.na(t)) {
+find_class_type <- Vectorize(function(t, b) {
+  if ((!is.na(t)) && (t != "")) {
     t
   }
   else {
@@ -187,7 +202,7 @@ type <- Vectorize(function(t, b) {
 })
 
 team <- '(hold|ex. class|class|klynge|cluster|team)'
-team_number <- '(\\d+|I+)' 
+team_number <- '(\\d+|I+|samf|tilvalg)' 
 concat <- '(\\+|og|and|&|,)'
 space <- '( {0,1})'
 repeat_regex <- function(reg, star) {
@@ -205,19 +220,14 @@ regex_deltagere <- repeat_regex(str_c(team,
                                                          team_number), T),
                                       space), F)
 
-deltagere <- Vectorize(function(t, b, simplify=T) {
+find_participants <- Vectorize(function(t, b) {
   if(t=='Forelæsning') {
-    'Alle'
+    'All'
   }
   else {
     d <- str_extract(b, regex(regex_deltagere, ignore_case = T)) 
     if (is.na(d)) {
-      if (simplify) {
-        'Alle'
-      }
-      else {
-        b
-      }
+      'All'
     }
     else {d}
   }
@@ -238,9 +248,43 @@ replace_romans <- Vectorize(function(n) {
   }
 })
 
-timetable %<>% format_yearly_timetable()
-write_csv(timetable, 'timetable_all_departments_1718.csv')
+scrape_year <- function(course_list, departments, n_rows=0) {
+  
+  scraped_departs <- map(departments, function(d) {scrape_department(course_list, d, n_rows)})
+  
+  timetable <- bind_rows(map(scraped_departs, function(d) {d[['timetable']]}))
+  failures <- bind_rows(map(scraped_departs, function(d) {d[['failures']]}))
+  courses <- bind_rows(map(scraped_departs, function(d) {d[['courses']]}))
+  
+  timetable %<>% 
+    format_yearly_timetable(str_c(course_list$start_year[1], '/', course_list$end_year[2]))
+  
+  list('timetable'=timetable, 'failures'=failures, 'courses'=courses)
+}
 
-#1) Make function from yearly course list to formatted dataframe from all departments
-#2) Get course lists from all years
-#3) Scrape all years
+year1718 <- scrape_year(course_lists[['1718']], c(2200, 2300, 2400, 2500))
+year1617 <- scrape_year(course_lists[['1617']], c(2200, 2300, 2400, 2500))
+year1516 <- scrape_year(course_lists[['1516']], c(2200, 2300, 2400, 2500))
+
+collect_years <- function(years) {
+  timetable <- bind_rows(map(years, function(d) {d[['timetable']]}))
+  courses <- bind_rows(map(years, get_courses))
+  list('timetable'=timetable, 'courses'=courses)
+}
+
+get_courses <- function(year) {
+  year[['courses']] %>% 
+    select(module, id, institute, start_year, end_year) %>%
+    left_join(year[['failures']] %>% 
+                select(id) %>%  
+                mutate(error = 1)) %>%
+    mutate(studyyear = str_c(start_year,'/',end_year),
+           institute_num = str_sub(institute, end=4),
+           error = ifelse(is.na(error), 0, 1)) %>%
+    select(-id, -start_year, -end_year, -institute)
+}
+
+all_years <- collect_years(list(year1516, year1617, year1718))
+
+write_csv(all_years[['timetable']], 'timetable.csv')
+write_csv(all_years[['courses']], 'scraped_courses.csv')

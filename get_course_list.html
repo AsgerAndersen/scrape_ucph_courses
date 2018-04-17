@@ -2,7 +2,9 @@
 <html>
 <head>
 	
-	<script type="text/javascript" src="filter.js"></script>
+	<script type="text/javascript" src="filter1718.js"></script>
+	<script type="text/javascript" src="filter1617.js"></script>
+	<script type="text/javascript" src="filter1516.js"></script>
 
 	<script type="text/javascript">
 		function exportToCsv(filename, rows) {
@@ -50,9 +52,21 @@
 
 </head>
 <body>
+	<!--
 	<script type="text/javascript">
-		var courses = FilterModules();
-		exportToCsv('course_list.csv', courses);
+		var courses1718 = FilterModules1718();
+		exportToCsv('course_list1718.csv', courses1718);
+	</script>
+	-->
+	<!--
+	<script type="text/javascript">
+		var courses1617 = FilterModules1617();
+		exportToCsv('course_list1617.csv', courses1617);
+	</script>
+	-->
+	<script type="text/javascript">
+		var courses1516 = FilterModules1516();
+		exportToCsv('course_list1516.csv', courses1516);
 	</script>
 </body>
 </html>
