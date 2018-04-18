@@ -260,11 +260,13 @@ scrape_year <- function(course_list, departments, n_rows=0) {
     format_yearly_timetable(str_c(course_list$start_year[1], '/', course_list$end_year[2]))
   
   list('timetable'=timetable, 'failures'=failures, 'courses'=courses)
+  
 }
 
-year1718 <- scrape_year(course_lists[['1718']], c(2200, 2300, 2400, 2500))
-year1617 <- scrape_year(course_lists[['1617']], c(2200, 2300, 2400, 2500))
-year1516 <- scrape_year(course_lists[['1516']], c(2200, 2300, 2400, 2500))
+departments <- c(2200, 2300, 2400, 2500)
+year1718 <- scrape_year(course_lists[['1718']], departments)
+year1617 <- scrape_year(course_lists[['1617']], departments)
+year1516 <- scrape_year(course_lists[['1516']], departments)
 
 collect_years <- function(years) {
   timetable <- bind_rows(map(years, function(d) {d[['timetable']]}))
@@ -285,6 +287,87 @@ get_courses <- function(year) {
 }
 
 all_years <- collect_years(list(year1516, year1617, year1718))
+timetable <- all_years[['timetable']]
+courses <- all_years[['courses']]
+rm(all_years, year1516, year1617, year1718)
 
-write_csv(all_years[['timetable']], 'timetable.csv')
-write_csv(all_years[['courses']], 'scraped_courses.csv')
+timetable %<>% 
+  mutate(class_num = str_split(class_num,',')) %>% 
+  unnest() %>%
+  mutate(class_num = as.integer(class_num))
+
+#-----------------------------------------------------------------------------------------------
+#Scrape course ids
+
+scrape_course_ids <- Vectorize(function(url) {
+  read_html(url) %>% 
+    html_nodes('#main-area li') %>% 
+    html_text()
+})
+
+simplify_names <- function(df) {
+  df %>% 
+    mutate(course_name_tomatch = 
+             str_remove_all(course_name, 
+             regex('\\(.*\\)|cancel{1,2}ed|udbydes|.*:|in(k|c)l.*|ects', ignore_case=T)))
+}
+
+course_ids <- data_frame(institute_num = departments,
+                         studyboard_num = c('0009','0033','0010','0012'),
+                         year = rep(list(list(c('2015-2016', '15/16'), 
+                                              c('2016-2017', '16/17'), 
+                                              c('2017-2018', '17/18'))), 4)) %>% 
+  unnest() %>% 
+  mutate(year_url = map_chr(year, function(y) y[1]),
+         studyyear = map_chr(year, function(y) y[2]),
+         url = str_c('https://kurser.ku.dk/archive/', year_url, '/STUDYBOARD_', studyboard_num),
+         course_id = scrape_course_ids(url)) %>% 
+  select(-studyboard_num, -year_url, -year) %>% 
+  unnest() %>% 
+  mutate(course_id = str_split(course_id, '-', 2),
+         course_name = map_chr(course_id, function(c) {c[2]}),
+         course_id = map_chr(course_id, function(c) {c[1]})) %>%
+  simplify_names()
+
+timetable_names <- timetable %>% 
+  distinct(institute_num, studyyear, course_name, semester) %>% 
+  simplify_names()
+
+match_courses <- function(name, inst, year) {
+  
+  course_ids %>% 
+    filter(institute_num == inst, 
+           studyyear == year) %>%
+    mutate(str_dist = as.double(adist(course_name_tomatch, name, ignore.case = T))) %>% 
+    arrange(str_dist) %>% 
+    select(course_name, course_name_tomatch, course_id, str_dist)
+  
+}
+
+course_map <- timetable_names %>% 
+  mutate(matches = pmap(list(course_name_tomatch, 
+                             institute_num, 
+                             studyyear), match_courses),
+         matched_name = map_chr(matches, function(l) l[['course_name_tomatch']][1]),
+         matched_name_full = map_chr(matches, function(l) l[['course_name']][1]),
+         matched_id = map_chr(matches, function(l) l[['course_id']][1]),
+         matched_dist = map_dbl(matches, function(l) l[['str_dist']][1]))
+
+ggplot(course_map, aes(matched_dist)) + geom_bar()
+ggplot(filter(course_map, matched_dist < 16), aes(matched_dist)) + geom_bar()
+accept_threshold <- 5
+
+timetable <- course_map %>% 
+  filter(matched_dist <= accept_threshold) %>% 
+  select(institute_num, studyyear, semester, 
+         course_name, matched_name = matched_name_full, 
+         matched_id) %>% 
+  right_join(timetable)
+
+filter(timetable, is.na(matched_id)) %>% distinct(course_name) %>% .$course_name
+
+#----------------------------------------------------------------------------------------------
+#Save data
+write_csv(timetable, 'timetable.csv')
+write_csv(courses, 'scraped_courses.csv')
+write_csv(select(course_map, -matches), 'course_map.csv')
